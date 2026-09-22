@@ -188,8 +188,22 @@ class NoteService {
     }
 
     // 2. Decrypt the note content with AES-256-GCM and verify AAD
+    // If the stored record has an AAD created with an earlier version due to version drift,
+    // determine the version embedded in the canonical AAD string to authenticate and heal the record
+    let versionForDecrypt = encryptedRecord.version;
+    if (encryptedRecord.aad) {
+      const aadParts = encryptedRecord.aad.split(':');
+      if (aadParts.length >= 3 && aadParts[0] === id) {
+        const parsedAadVersion = parseInt(aadParts[1], 10);
+        if (!isNaN(parsedAadVersion) && parsedAadVersion !== encryptedRecord.version) {
+          console.warn(`[Vault Recovery] Note ${id} AAD version (${parsedAadVersion}) differs from metadata version (${encryptedRecord.version}). Using authenticated AAD version.`);
+          versionForDecrypt = parsedAadVersion;
+        }
+      }
+    }
+
     const payload: EncryptedPayload = {
-      version: encryptedRecord.version,
+      version: versionForDecrypt,
       algorithm: ENCRYPTION_ALGORITHM,
       ciphertext: encryptedRecord.ciphertext,
       iv: encryptedRecord.iv,
@@ -197,6 +211,12 @@ class NoteService {
     };
 
     const decryptedContent = await encryptionService.decrypt(payload, noteKey, id);
+
+    // If version had drifted in local storage, heal the record so future operations stay consistent
+    if (versionForDecrypt !== encryptedRecord.version) {
+      encryptedRecord.version = versionForDecrypt;
+      await indexedDbService.saveEncryptedNote(encryptedRecord);
+    }
 
     return {
       id: metadata.noteId,
@@ -323,15 +343,18 @@ class NoteService {
         rootKey
       );
 
-      // Encrypt with fresh IV
+      // Calculate next monotonic version
+      const nextVersion = (existingEncrypted.version || 1) + 1;
+
+      // Encrypt with fresh IV and nextVersion bound to AAD
       const encryptedPayload = await encryptionService.encrypt(
         newContent,
         noteKey,
         id,
-        CURRENT_ENCRYPTION_VERSION
+        nextVersion
       );
 
-      existingEncrypted.version = (existingEncrypted.version || 1) + 1;
+      existingEncrypted.version = nextVersion;
       existingEncrypted.ciphertext = encryptedPayload.ciphertext;
       existingEncrypted.iv = encryptedPayload.iv;
       existingEncrypted.aad = encryptedPayload.aad;

@@ -13,14 +13,22 @@ export const NoteDetailPage: React.FC = () => {
   const [note, setNote] = useState<Note | null>(null);
   const [loading, setLoading] = useState(true);
   const [isShareOpen, setIsShareOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
     const fetchNote = async () => {
       setLoading(true);
-      const found = await noteService.getNoteById(id);
-      setNote(found);
-      setLoading(false);
+      setError(null);
+      try {
+        const found = await noteService.getNoteById(id);
+        setNote(found);
+      } catch (err: any) {
+        console.error(`[NoteDetail] Error loading note "${id}":`, err);
+        setError(err?.message || 'Decryption failed: cryptographic integrity check failed.');
+      } finally {
+        setLoading(false);
+      }
     };
     fetchNote();
   }, [id]);
@@ -30,6 +38,23 @@ export const NoteDetailPage: React.FC = () => {
       <div className="max-w-4xl mx-auto py-16 flex flex-col items-center justify-center space-y-3">
         <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
         <p className="text-xs text-slate-400 font-medium">Decrypting note payload locally...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-2xl mx-auto py-12">
+        <div className="bg-white rounded-2xl border border-rose-200 p-8 shadow-card">
+          <EmptyState
+            icon={<FileQuestion className="w-8 h-8 text-rose-500" />}
+            title="Decryption Error"
+            description={`Could not decrypt this note payload: ${error}`}
+            actionLabel="Back to All Notes"
+            actionIcon={<ArrowLeft className="w-4 h-4" />}
+            onAction={() => navigate('/notes')}
+          />
+        </div>
       </div>
     );
   }

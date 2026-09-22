@@ -136,6 +136,10 @@ export class EncryptionService implements IEncryptionService {
       
       // If payload's aad doesn't match expected note context, fail immediately
       if (payload.aad !== expectedAad) {
+        console.error(
+          `[Crypto] AAD Mismatch! Expected: "${expectedAad}", Got: "${payload.aad}" ` +
+          `(expectedNoteId: "${expectedNoteId}", payload.version: ${payload.version}, payload.algorithm: "${payload.algorithm}")`
+        );
         throw new AuthenticationError('AAD mismatch: Note identifier or encryption version does not match payload metadata.');
       }
 
