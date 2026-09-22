@@ -1,0 +1,37 @@
+{
+  "name": "ciperflow",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "tsx src/crypto/__tests__/securityTests.ts",
+    "test:phase3": "tsx src/crypto/__tests__/phase3Demonstration.ts",
+    "test:phase4": "tsx src/crypto/__tests__/phase4Demonstration.ts",
+    "test:phase4:security": "tsx src/crypto/__tests__/phase4SecurityTests.ts",
+    "demo": "tsx src/crypto/__tests__/demonstration.ts"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.47.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.4",
+    "tailwind-merge": "^3.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "autoprefixer": "^10.6.1",
+    "fake-indexeddb": "^6.2.5",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}

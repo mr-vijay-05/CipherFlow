@@ -1,0 +1,40 @@
+import { Device } from '../types/security';
+
+export const INITIAL_DEVICES: Device[] = [
+  {
+    id: 'dev-1',
+    name: 'Windows Workstation (Current)',
+    type: 'desktop',
+    os: 'Windows 11 Pro',
+    browser: 'Chrome 128 (WebCrypto Enclave)',
+    ipAddress: '192.168.1.45 (Local)',
+    lastActive: 'Active right now',
+    isCurrent: true,
+    status: 'active',
+    keyFingerprint: 'SHA256:7e:92:4f:b1:30:1a:8c:df:99:41',
+  },
+  {
+    id: 'dev-2',
+    name: 'iPhone 15 Pro',
+    type: 'mobile',
+    os: 'iOS 18.1',
+    browser: 'CipherFlow Mobile Safari',
+    ipAddress: '49.205.12.89',
+    lastActive: '34 minutes ago',
+    isCurrent: false,
+    status: 'active',
+    keyFingerprint: 'SHA256:1a:88:cc:40:9f:3b:02:8e:66:10',
+  },
+  {
+    id: 'dev-3',
+    name: 'iPad Air (Field)',
+    type: 'tablet',
+    os: 'iPadOS 17.5',
+    browser: 'CipherFlow Tablet',
+    ipAddress: '157.48.91.20',
+    lastActive: '4 days ago',
+    isCurrent: false,
+    status: 'revoked',
+    keyFingerprint: 'SHA256:bb:33:91:0a:fa:84:11:7d:02:22',
+  },
+];
