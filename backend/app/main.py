@@ -25,10 +25,11 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
 )
 
-# CORS Middleware
+# CORS Middleware (allow explicit list + any localhost/127.0.0.1 port in dev)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,6 +38,10 @@ app.add_middleware(
 # Request Size Limit Middleware (Section 20)
 @app.middleware("http")
 async def validate_request_size(request: Request, call_next):
+    # Preflight OPTIONS requests carry no payload
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > settings.MAX_PAYLOAD_BYTES:
         return JSONResponse(
