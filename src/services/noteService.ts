@@ -216,6 +216,11 @@ class NoteService {
     if (versionForDecrypt !== encryptedRecord.version) {
       encryptedRecord.version = versionForDecrypt;
       await indexedDbService.saveEncryptedNote(encryptedRecord);
+      if (metadata) {
+        metadata.remoteVersion = versionForDecrypt;
+        await indexedDbService.saveMetadata(metadata);
+      }
+      console.info(`[Vault Recovery] Note ${id} metadata healed to version ${versionForDecrypt}.`);
     }
 
     return {
