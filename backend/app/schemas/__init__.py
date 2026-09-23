@@ -1,11 +1,11 @@
-from backend.app.schemas.note import (
+from app.schemas.note import (
     NoteMetadataPayload,
     EncryptedNoteCreate,
     EncryptedNoteUpdate,
     EncryptedNoteResponse,
 )
-from backend.app.schemas.sync import SyncResponse
-from backend.app.schemas.auth import DevLoginRequest, TokenResponse, UserResponse
+from app.schemas.sync import SyncResponse
+from app.schemas.auth import DevLoginRequest, TokenResponse, UserResponse
 
 __all__ = [
     "NoteMetadataPayload",
@@ -17,3 +17,4 @@ __all__ = [
     "TokenResponse",
     "UserResponse",
 ]
+

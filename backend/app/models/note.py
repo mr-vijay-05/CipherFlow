@@ -1,8 +1,11 @@
-import datetime
+from datetime import datetime, timezone
 import json
 from sqlalchemy import Column, String, Integer, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
-from backend.app.database import Base
+from app.database import Base
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 class Note(Base):
     __tablename__ = "notes"
@@ -11,8 +14,8 @@ class Note(Base):
     owner_id = Column(String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     current_version = Column(Integer, default=1, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     owner = relationship("User", back_populates="notes")
     versions = relationship("NoteVersion", back_populates="note", cascade="all, delete-orphan", order_by="NoteVersion.version")
@@ -20,6 +23,7 @@ class Note(Base):
     shares = relationship("NoteShare", back_populates="note", cascade="all, delete-orphan")
     key_envelopes = relationship("KeyEnvelope", back_populates="note", cascade="all, delete-orphan")
     audit_events = relationship("AuditEvent", back_populates="note", cascade="all, delete-orphan", order_by="AuditEvent.created_at")
+    search_tokens = relationship("SearchTokenIndex", back_populates="note", cascade="all, delete-orphan")
 
 
 class NoteVersion(Base):
@@ -36,7 +40,7 @@ class NoteVersion(Base):
     iv = Column(String(64), nullable=False)  # Base64 encoded 96-bit IV
     wrapped_note_key = Column(Text, nullable=False)  # Base64 encoded AES-KW wrapped note key
     aad = Column(String(255), nullable=False)  # Canonical AAD string
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     note = relationship("Note", back_populates="versions")
 
@@ -54,7 +58,7 @@ class NoteMetadata(Base):
     space_id = Column(String(64), nullable=True, index=True)
     is_favorite = Column(Boolean, default=False, nullable=False)
     is_pinned = Column(Boolean, default=False, nullable=False)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     note = relationship("Note", back_populates="metadata_record")
 
@@ -68,3 +72,4 @@ class NoteMetadata(Base):
     @tags.setter
     def tags(self, val):
         self.tags_json = json.dumps(val or [])
+

@@ -14,9 +14,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-from backend.app.database import Base
-from backend.app.config import settings
-import backend.app.models
+from app.database import Base
+from app.config import settings
+import app.models
 
 # add your model's MetaData object here
 target_metadata = Base.metadata
@@ -78,3 +78,4 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+

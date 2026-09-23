@@ -1,7 +1,7 @@
 import datetime
 from sqlalchemy import Column, String, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
-from backend.app.database import Base
+from app.database import Base
 
 class Device(Base):
     __tablename__ = "devices"
@@ -14,3 +14,4 @@ class Device(Base):
 
     user = relationship("User", back_populates="devices")
     sync_states = relationship("SyncState", back_populates="device", cascade="all, delete-orphan")
+

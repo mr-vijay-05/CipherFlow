@@ -41,6 +41,14 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const { showToast } = useToast();
 
   useEffect(() => {
+    if (isOpen) {
+      sharingService.ensureDemoIdentitiesInitialized().catch(err => {
+        console.warn('Notice during demo identity check:', err);
+      });
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
     if (query.trim().length >= 1) {
       const timer = setTimeout(async () => {
         const results = await sharingService.searchUsers(query.trim());

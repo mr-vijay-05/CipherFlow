@@ -20,6 +20,8 @@ export interface AuditLog {
   actor: string;
   ipAddress: string;
   status: 'success' | 'warning' | 'alert';
+  isClientRecorded?: boolean;
+  rawCreatedAt?: string;
 }
 
 export interface SecurityOverview {

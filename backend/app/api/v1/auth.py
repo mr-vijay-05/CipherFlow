@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from backend.app.database import get_db
-from backend.app.models.user import User
-from backend.app.schemas.auth import DevLoginRequest, TokenResponse, UserResponse
-from backend.app.security.auth import create_dev_access_token, get_current_user
+from app.database import get_db
+from app.models.user import User
+from app.schemas.auth import DevLoginRequest, TokenResponse, UserResponse
+from app.security.auth import create_dev_access_token, get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -36,3 +36,4 @@ def get_current_user_profile(user: User = Depends(get_current_user)):
         email=user.email,
         createdAt=user.created_at.isoformat(),
     )
+

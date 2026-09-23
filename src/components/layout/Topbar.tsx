@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Search, Bell, Sun, Moon, ChevronDown, Menu, ShieldCheck } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Search, Bell, Sun, Moon, ChevronDown, Menu, ShieldCheck, KeyRound, LogOut } from 'lucide-react';
 import { BRAND } from '../../constants/brand';
 import { useToast } from '../../hooks/useToast';
+import { useAuth } from '../../context/AuthContext';
 
 export interface TopbarProps {
   onOpenSearch: () => void;
@@ -12,6 +14,8 @@ export const Topbar: React.FC<TopbarProps> = ({
   onOpenSearch,
   onOpenMobileMenu,
 }) => {
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
   const [isDarkTheme, setIsDarkTheme] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserDropdown, setShowUserDropdown] = useState(false);
@@ -113,36 +117,49 @@ export const Topbar: React.FC<TopbarProps> = ({
             className="flex items-center gap-2 pl-1.5 sm:pl-2 pr-1 sm:pr-2 py-1 rounded-xl hover:bg-slate-100 cursor-pointer transition-colors"
           >
             <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center ring-2 ring-blue-100 shrink-0">
-              {BRAND.defaultUser.avatarText}
+              {user.avatarText || BRAND.defaultUser.avatarText}
             </div>
             <span className="hidden md:inline-block text-xs font-bold text-slate-800">
-              {BRAND.defaultUser.name}
+              {user.name || BRAND.defaultUser.name}
             </span>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 hidden sm:inline-block" />
           </div>
 
           {/* User Menu Dropdown */}
           {showUserDropdown && (
-            <div className="absolute right-0 mt-2 w-52 bg-white rounded-2xl shadow-dropdown border border-slate-200 p-2 z-50 animate-in fade-in duration-150">
+            <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-dropdown border border-slate-200 p-2 z-50 animate-in fade-in duration-150">
               <div className="px-3 py-2 border-b border-slate-100 mb-1">
-                <p className="text-xs font-bold text-slate-900">{BRAND.defaultUser.name}</p>
-                <p className="text-[11px] text-slate-400 truncate">{BRAND.defaultUser.email}</p>
+                <p className="text-xs font-bold text-slate-900">{user.name || BRAND.defaultUser.name}</p>
+                <p className="text-[11px] text-slate-400 truncate">{user.email || BRAND.defaultUser.email}</p>
                 <div className="mt-1 flex items-center gap-1 text-[10px] text-emerald-600 font-semibold">
-                  <ShieldCheck className="w-3 h-3" /> Hardware Enclave Active
+                  <ShieldCheck className="w-3 h-3" /> {user.role || 'Protected Vault Active'}
                 </div>
               </div>
               <a href="/settings" className="block px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 rounded-lg">
                 Account & Security Settings
               </a>
-              <a href="/devices" className="block px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 rounded-lg">
-                Manage Devices
-              </a>
+              <button
+                onClick={() => {
+                  setShowUserDropdown(false);
+                  navigate('/login');
+                }}
+                className="w-full text-left px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 rounded-lg flex items-center gap-2 font-medium"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Switch Persona / Login</span>
+              </button>
               <div className="border-t border-slate-100 my-1"></div>
               <button
-                onClick={() => showToast('Session Locked', 'Local memory cache cleared.', 'info')}
-                className="w-full text-left px-3 py-2 text-xs text-rose-600 hover:bg-rose-50 rounded-lg"
+                onClick={() => {
+                  setShowUserDropdown(false);
+                  logout();
+                  showToast('Session Locked', 'Local memory cache cleared and vault locked.', 'info');
+                  navigate('/login');
+                }}
+                className="w-full text-left px-3 py-2 text-xs text-rose-600 hover:bg-rose-50 rounded-lg flex items-center gap-2 font-medium"
               >
-                Lock Enclave Session
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Lock Enclave Session</span>
               </button>
             </div>
           )}

@@ -1,7 +1,7 @@
 from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from backend.app.config import settings
+from app.config import settings
 
 db_url = settings.DATABASE_URL
 connect_args = {}
@@ -25,3 +25,4 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+

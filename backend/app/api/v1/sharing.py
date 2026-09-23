@@ -1,13 +1,14 @@
-import datetime
 import json
+import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
-from backend.app.database import get_db
-from backend.app.models.user import User
-from backend.app.models.note import Note, NoteVersion
-from backend.app.models.sharing import UserIdentity, NoteShare, KeyEnvelope, AuditEvent
-from backend.app.schemas.sharing import (
+from app.database import get_db
+from app.models.user import User
+from app.models.note import Note, NoteVersion
+from app.models.sharing import UserIdentity, NoteShare, KeyEnvelope, AuditEvent
+from app.schemas.sharing import (
     PublicKeyRegister,
     PublicKeyResponse,
     ShareCreateRequest,
@@ -16,10 +17,27 @@ from backend.app.schemas.sharing import (
     KeyEnvelopeSchema,
     KeyRotationRequest,
     AuditEventResponse,
+    TamperReportRequest,
 )
-from backend.app.security.auth import get_current_user
+from app.security.auth import get_current_user
 
 router = APIRouter(tags=["Secure Sharing & Cryptographic Revocation"])
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+def format_utc_iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+def get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "Not available"
 
 def get_note_and_check_permission(
     note_id: str,
@@ -76,7 +94,7 @@ def register_public_key(
     ).first()
 
     jwk_str = json.dumps(payload.publicKeyJwk)
-    now = datetime.datetime.utcnow()
+    now = utc_now()
 
     if existing:
         existing.key_id = key_id
@@ -161,6 +179,7 @@ def search_users(
 def create_note_share(
     note_id: str,
     payload: ShareCreateRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -173,7 +192,8 @@ def create_note_share(
         db.add(recipient)
         db.commit()
 
-    now = datetime.datetime.utcnow()
+    now = utc_now()
+    client_ip = get_client_ip(request)
 
     # Store key envelope
     envelope_data = payload.envelope
@@ -220,13 +240,24 @@ def create_note_share(
 
     # Record NOTE_SHARED Audit Event
     audit = AuditEvent(
-        id=f"audit-{int(now.timestamp()*1000)}",
+        id=f"audit-{int(now.timestamp()*1000)}-{uuid.uuid4().hex[:6]}",
         note_id=note_id,
         actor_id=current_user.id,
         event_type="NOTE_SHARED",
         target_user_id=payload.recipientUserId,
         note_version=note.current_version,
-        metadata_json=json.dumps({"role": payload.role}),
+        metadata_json=json.dumps({
+            "noteId": note_id,
+            "version": note.current_version,
+            "recipientUserId": payload.recipientUserId,
+            "role": payload.role,
+            "envelopeId": new_envelope.id,
+            "timestamp": format_utc_iso(now),
+            "status": "success",
+            "ipAddress": client_ip,
+            "action": "Cryptographic Access Grant Created",
+            "noteTitle": note.metadata_record.title if note.metadata_record else "Note",
+        }),
         created_at=now,
     )
     db.add(audit)
@@ -240,9 +271,9 @@ def create_note_share(
         recipientId=share_record.recipient_id,
         role=share_record.role,
         status=share_record.status,
-        createdAt=share_record.created_at.isoformat(),
-        updatedAt=share_record.updated_at.isoformat(),
-        revokedAt=share_record.revoked_at.isoformat() if share_record.revoked_at else None,
+        createdAt=format_utc_iso(share_record.created_at),
+        updatedAt=format_utc_iso(share_record.updated_at),
+        revokedAt=format_utc_iso(share_record.revoked_at) if share_record.revoked_at else None,
     )
 
 
@@ -276,6 +307,7 @@ def update_share_role(
     note_id: str,
     recipient_id: str,
     payload: ShareUpdateRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -292,17 +324,24 @@ def update_share_role(
 
     old_role = share.role
     share.role = payload.role
-    now = datetime.datetime.utcnow()
+    now = utc_now()
     share.updated_at = now
+    client_ip = get_client_ip(request)
 
     audit = AuditEvent(
-        id=f"audit-{int(now.timestamp()*1000)}",
+        id=f"audit-{int(now.timestamp()*1000)}-{uuid.uuid4().hex[:6]}",
         note_id=note_id,
         actor_id=current_user.id,
         event_type="ROLE_CHANGED",
         target_user_id=recipient_id,
         note_version=note.current_version,
-        metadata_json=json.dumps({"oldRole": old_role, "newRole": payload.role}),
+        metadata_json=json.dumps({
+            "oldRole": old_role,
+            "newRole": payload.role,
+            "ipAddress": client_ip,
+            "action": "Collaborator Role Changed",
+            "noteTitle": note.metadata_record.title if note.metadata_record else "Note",
+        }),
         created_at=now,
     )
     db.add(audit)
@@ -316,8 +355,8 @@ def update_share_role(
         recipientId=share.recipient_id,
         role=share.role,
         status=share.status,
-        createdAt=share.created_at.isoformat(),
-        updatedAt=share.updated_at.isoformat(),
+        createdAt=format_utc_iso(share.created_at),
+        updatedAt=format_utc_iso(share.updated_at),
     )
 
 
@@ -325,6 +364,7 @@ def update_share_role(
 def revoke_share(
     note_id: str,
     recipient_id: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -339,10 +379,11 @@ def revoke_share(
     if not share:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active share not found for this user.")
 
-    now = datetime.datetime.utcnow()
+    now = utc_now()
     share.status = "REVOKED"
     share.revoked_at = now
     share.updated_at = now
+    client_ip = get_client_ip(request)
 
     # Mark envelope revoked
     db.query(KeyEnvelope).filter(
@@ -352,13 +393,18 @@ def revoke_share(
 
     # Record ACCESS_REVOKED audit event
     audit = AuditEvent(
-        id=f"audit-{int(now.timestamp()*1000)}",
+        id=f"audit-{int(now.timestamp()*1000)}-{uuid.uuid4().hex[:6]}",
         note_id=note_id,
         actor_id=current_user.id,
         event_type="ACCESS_REVOKED",
         target_user_id=recipient_id,
         note_version=note.current_version,
-        metadata_json=json.dumps({"revokedRole": share.role}),
+        metadata_json=json.dumps({
+            "revokedRole": share.role,
+            "ipAddress": client_ip,
+            "action": "Collaborator Access Revocation Executed",
+            "noteTitle": note.metadata_record.title if note.metadata_record else "Note",
+        }),
         created_at=now,
     )
     db.add(audit)
@@ -378,6 +424,7 @@ def revoke_share(
 def rotate_note_key(
     note_id: str,
     payload: KeyRotationRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -396,7 +443,8 @@ def rotate_note_key(
             detail=f"Invalid target version {payload.version}. Expected {note.current_version + 1}.",
         )
 
-    now = datetime.datetime.utcnow()
+    now = utc_now()
+    client_ip = get_client_ip(request)
 
     # Create new NoteVersion
     new_version_record = NoteVersion(
@@ -433,13 +481,18 @@ def rotate_note_key(
 
     # Record KEY_ROTATED audit event
     audit = AuditEvent(
-        id=f"audit-{int(now.timestamp()*1000)}",
+        id=f"audit-{int(now.timestamp()*1000)}-{uuid.uuid4().hex[:6]}",
         note_id=note_id,
         actor_id=current_user.id,
         event_type="KEY_ROTATED",
         target_user_id=None,
         note_version=payload.version,
-        metadata_json=json.dumps({"recipientCount": len(payload.envelopes)}),
+        metadata_json=json.dumps({
+            "recipientCount": len(payload.envelopes),
+            "ipAddress": client_ip,
+            "action": "Cryptographic Rekey Executed",
+            "noteTitle": note.metadata_record.title if note.metadata_record else "Note",
+        }),
         created_at=now,
     )
     db.add(audit)
@@ -488,7 +541,7 @@ def get_key_envelopes(
             "iv": e.iv,
             "algorithm": e.algorithm,
             "version": e.version,
-            "createdAt": e.created_at.isoformat(),
+            "createdAt": format_utc_iso(e.created_at),
         }
         for e in envelopes
     ]
@@ -515,7 +568,7 @@ def get_note_audit_events(
             targetUserId=ev.target_user_id,
             noteVersion=ev.note_version,
             metadata=ev.event_metadata,
-            createdAt=ev.created_at.isoformat(),
+            createdAt=format_utc_iso(ev.created_at),
         )
         for ev in events
     ]
@@ -523,12 +576,37 @@ def get_note_audit_events(
 
 @router.get("/audit-events", response_model=List[AuditEventResponse])
 def get_user_audit_events(
+    category: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    events = db.query(AuditEvent).filter(
-        (AuditEvent.actor_id == current_user.id) | (AuditEvent.target_user_id == current_user.id)
-    ).order_by(AuditEvent.created_at.desc()).limit(50).all()
+    owned_notes = db.query(Note.id).filter(Note.owner_id == current_user.id)
+    shared_notes = db.query(NoteShare.note_id).filter(
+        NoteShare.recipient_id == current_user.id,
+        NoteShare.status == "ACTIVE"
+    )
+
+    query = db.query(AuditEvent).filter(
+        (AuditEvent.actor_id == current_user.id) |
+        (AuditEvent.target_user_id == current_user.id) |
+        AuditEvent.note_id.in_(owned_notes) |
+        AuditEvent.note_id.in_(shared_notes)
+    )
+
+    if category and category != "all":
+        cat = category.lower()
+        if cat in ["edit", "create"]:
+            query = query.filter(AuditEvent.event_type.in_(["NOTE_CREATED", "NOTE_UPDATED", "NOTE_REENCRYPTED"]))
+        elif cat == "share":
+            query = query.filter(AuditEvent.event_type.in_(["NOTE_SHARED", "ROLE_CHANGED", "SHARE_CREATED", "SHARE_ROLE_CHANGED"]))
+        elif cat == "revoke":
+            query = query.filter(AuditEvent.event_type.in_(["ACCESS_REVOKED", "KEY_ROTATED", "CRYPTOGRAPHIC_REKEY"]))
+        elif cat == "security":
+            query = query.filter(AuditEvent.event_type.in_(["NOTE_DECRYPTION_TAMPER_FAILURE", "KEY_ROTATED", "CRYPTOGRAPHIC_REKEY"]))
+        elif cat == "device":
+            query = query.filter(AuditEvent.event_type.in_(["DEVICE_REGISTERED", "DEVICE_REVOKED"]))
+
+    events = query.order_by(AuditEvent.created_at.desc()).limit(100).all()
 
     return [
         AuditEventResponse(
@@ -539,7 +617,56 @@ def get_user_audit_events(
             targetUserId=ev.target_user_id,
             noteVersion=ev.note_version,
             metadata=ev.event_metadata,
-            createdAt=ev.created_at.isoformat(),
+            createdAt=format_utc_iso(ev.created_at),
         )
         for ev in events
     ]
+
+
+@router.post("/audit-events/report-tamper", response_model=AuditEventResponse, status_code=status.HTTP_201_CREATED)
+def report_tamper_event(
+    payload: TamperReportRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    note = db.query(Note).filter(Note.id == payload.noteId).first()
+    note_title = "Encrypted Note"
+    if note and note.metadata_record:
+        note_title = note.metadata_record.title
+
+    now = utc_now()
+    client_ip = get_client_ip(request)
+
+    audit = AuditEvent(
+        id=f"audit-{int(now.timestamp()*1000)}-{uuid.uuid4().hex[:6]}",
+        note_id=payload.noteId,
+        actor_id=current_user.id,
+        event_type="NOTE_DECRYPTION_TAMPER_FAILURE",
+        target_user_id=None,
+        note_version=payload.version or (note.current_version if note else 1),
+        metadata_json=json.dumps({
+            "ipAddress": client_ip,
+            "noteTitle": note_title,
+            "action": "Decryption Integrity Check Failed",
+            "reason": payload.reason,
+            "details": payload.details or "Fail-closed: In-memory/storage ciphertext tampering detected by WebCrypto AES-GCM.",
+            "algorithm": "AES-256-GCM",
+            "status": "alert",
+        }),
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return AuditEventResponse(
+        id=audit.id,
+        noteId=audit.note_id,
+        actorId=audit.actor_id,
+        eventType=audit.event_type,
+        targetUserId=audit.target_user_id,
+        noteVersion=audit.note_version,
+        metadata=audit.event_metadata,
+        createdAt=format_utc_iso(audit.created_at),
+    )
+

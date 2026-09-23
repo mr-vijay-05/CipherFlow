@@ -16,9 +16,10 @@ import { Note, Collaborator } from '../types/note';
 import { noteService } from './noteService';
 import { indexedDbService } from '../storage/indexedDb';
 import { keyManagementService } from '../crypto/keys';
-import { identityKeyService, IdentityKeyPair } from '../crypto/identityKeys';
+import { identityKeyService, IdentityKeyPair, validateP256PublicJwk } from '../crypto/identityKeys';
 import { envelopeCryptoService } from '../crypto/sharing';
 import { rekeyService, AuthorizedRecipient } from '../crypto/rekeyService';
+import { apiClient } from './api/client';
 import {
   registerPublicKey,
   fetchUserPublicKey,
@@ -36,6 +37,12 @@ import {
   CollaboratorSearchResult,
   PublicKeyRecord,
 } from './api/sharingApi';
+import {
+  getRemoteNote,
+  createRemoteNote,
+  updateRemoteNote,
+  RemoteEncryptedNoteResponse,
+} from './api/notesApi';
 import { getCurrentUser } from './api/authApi';
 
 export class SharingService {
@@ -74,8 +81,80 @@ export class SharingService {
     return identityKeyService.getOrInitializeIdentityKey(this.currentUserId);
   }
 
+  /**
+   * Development-only key re-registration/reset mechanism.
+   * Generates a new valid P-256 key pair via WebCrypto for demo users (dev, bob, carol)
+   * in the local Protected Local Vault and registers ONLY the exported public JWK with the backend.
+   * Private keys remain strictly client-side.
+   */
+  async resetDemoIdentityKeys(): Promise<void> {
+    const demoUsers = [
+      { id: 'user-bob', email: 'bob@cipherflow.com' },
+      { id: 'user-carol', email: 'carol@cipherflow.com' },
+      { id: 'user-dev', email: 'dev@cipherflow.com' },
+    ];
+
+    for (const demo of demoUsers) {
+      try {
+        // 1. Obtain dev token for this demo user
+        const tokenRes = await apiClient.post<{ accessToken?: string; access_token?: string }>(
+          '/api/v1/auth/dev-token',
+          { email: demo.email }
+        );
+        const token = tokenRes.accessToken || tokenRes.access_token;
+
+        // 2. Generate a valid P-256 key pair using WebCrypto
+        const keyPair = await identityKeyService.generateFreshIdentityKey(demo.id);
+
+        // Validate public key structure before registration
+        validateP256PublicJwk(keyPair.publicKeyJwk);
+
+        // 3. Register ONLY the public key JWK with backend
+        await apiClient.post(
+          `/api/v1/users/${encodeURIComponent(demo.id)}/public-key`,
+          {
+            publicKeyJwk: keyPair.publicKeyJwk,
+            algorithm: 'ECDH-P256',
+            version: 1,
+            keyId: `key-${demo.id}-1`,
+          },
+          token ? { Authorization: `Bearer ${token}` } : undefined
+        );
+
+        console.info(`[SharingService] Registered valid WebCrypto P-256 public key for ${demo.email}`);
+      } catch (err) {
+        console.warn(`[SharingService] Notice during demo identity key registration for ${demo.email}:`, err);
+      }
+    }
+  }
+
+  /**
+   * Ensures that demo collaborators (Bob and Carol) have valid P-256 public keys registered.
+   * If missing or malformed, generates and registers fresh valid keys.
+   */
+  async ensureDemoIdentitiesInitialized(): Promise<void> {
+    const demoUsers = ['user-bob', 'user-carol'];
+    let needsReset = false;
+
+    for (const uid of demoUsers) {
+      try {
+        const record = await fetchUserPublicKey(uid);
+        validateP256PublicJwk(record.publicKeyJwk);
+      } catch {
+        needsReset = true;
+        break;
+      }
+    }
+
+    if (needsReset) {
+      console.info('[SharingService] Initializing valid WebCrypto demo identity keys...');
+      await this.resetDemoIdentityKeys();
+    }
+  }
+
   async searchUsers(query: string): Promise<CollaboratorSearchResult[]> {
     try {
+      await this.ensureDemoIdentitiesInitialized();
       return await searchCollaborators(query);
     } catch (err) {
       console.warn('Search users failed, fallback empty:', err);
@@ -97,6 +176,113 @@ export class SharingService {
   }
 
   /**
+   * Precondition: Ensures the note is canonically synchronized with the backend
+   * before cryptographic envelope creation and sharing.
+   * Returns the authoritative backend record and version.
+   */
+  async ensureNoteSynchronized(noteId: string): Promise<RemoteEncryptedNoteResponse> {
+    // 1. Load local encrypted note & metadata
+    const encryptedNote = await indexedDbService.getEncryptedNote(noteId);
+    const metadata = await indexedDbService.getMetadata(noteId);
+    if (!encryptedNote || !metadata) {
+      throw new Error(`Note "${noteId}" not found in local Protected Vault.`);
+    }
+
+    // 2. Canonical noteId validation (Section 3)
+    if (!noteId || typeof noteId !== 'string' || noteId.trim() === '') {
+      throw new Error('Invalid canonical note identifier.');
+    }
+
+    const noteMetadataPayload = {
+      title: metadata.title || 'Untitled Note',
+      description: metadata.description || '',
+      tags: metadata.tags || [],
+      spaceId: metadata.spaceId,
+      isFavorite: metadata.isFavorite || false,
+      isPinned: metadata.isPinned || false,
+    };
+
+    // 3. Check backend note existence (Section 2)
+    let remoteRecord: RemoteEncryptedNoteResponse | null = null;
+    try {
+      remoteRecord = await getRemoteNote(noteId);
+    } catch (err: any) {
+      if (err?.status !== 404) {
+        throw err;
+      }
+      // Note not found on server (404)
+      remoteRecord = null;
+    }
+
+    // 4. If note does not exist remotely, upload encrypted record first (Section 4)
+    if (!remoteRecord) {
+      console.info(`[SharingService] Note "${noteId}" not present on server. Synchronizing encrypted version first...`);
+      remoteRecord = await createRemoteNote({
+        noteId: encryptedNote.noteId,
+        version: encryptedNote.version || 1,
+        ciphertext: encryptedNote.ciphertext,
+        iv: encryptedNote.iv,
+        wrappedNoteKey: encryptedNote.wrappedNoteKey,
+        aad: encryptedNote.aad,
+        metadata: noteMetadataPayload,
+      });
+
+      // Update local storage sync state
+      encryptedNote.syncStatus = 'synced';
+      encryptedNote.remoteVersion = remoteRecord.version;
+      encryptedNote.lastSyncedAt = remoteRecord.updatedAt;
+      await indexedDbService.saveEncryptedNote(encryptedNote);
+
+      metadata.syncStatus = 'synced';
+      metadata.remoteVersion = remoteRecord.version;
+      await indexedDbService.saveMetadata(metadata);
+    } else {
+      // Note exists remotely - verify version alignment (Section 5)
+      if (remoteRecord.version !== encryptedNote.version) {
+        if (encryptedNote.syncStatus === 'pending_update') {
+          console.info(`[SharingService] Pushing pending local updates for note "${noteId}" before sharing...`);
+          remoteRecord = await updateRemoteNote(noteId, {
+            version: remoteRecord.version + 1,
+            baseVersion: remoteRecord.version,
+            ciphertext: encryptedNote.ciphertext,
+            iv: encryptedNote.iv,
+            wrappedNoteKey: encryptedNote.wrappedNoteKey,
+            aad: encryptedNote.aad,
+            metadata: noteMetadataPayload,
+          });
+
+          encryptedNote.version = remoteRecord.version;
+          encryptedNote.syncStatus = 'synced';
+          encryptedNote.remoteVersion = remoteRecord.version;
+          encryptedNote.lastSyncedAt = remoteRecord.updatedAt;
+          await indexedDbService.saveEncryptedNote(encryptedNote);
+
+          metadata.remoteVersion = remoteRecord.version;
+          metadata.syncStatus = 'synced';
+          await indexedDbService.saveMetadata(metadata);
+        } else {
+          // Unresolved version conflict
+          throw new Error(
+            `Version conflict: Local vault version (${encryptedNote.version}) does not match server version (${remoteRecord.version}). Please refresh and sync before sharing.`
+          );
+        }
+      }
+    }
+
+    // Section 1: Development-only logging
+    // NEVER log plaintext note content or encryption keys.
+    console.debug('SHARING DEBUG', {
+      noteId: noteId,
+      noteTitle: metadata.title,
+      localNoteId: encryptedNote.noteId,
+      backendNoteId: remoteRecord.noteId,
+      currentVersion: remoteRecord.version,
+    });
+
+    return remoteRecord;
+  }
+
+  /**
    * Shares a note with a recipient:
    * 1. Retrieve recipient's registered public key JWK.
    * 2. Import recipient's public key.
@@ -113,25 +299,42 @@ export class SharingService {
     // 1. Ensure our own identity key is initialized
     await this.initializeIdentityKey();
 
-    // 2. Fetch recipient's public key
-    const recipientPubKeyRecord: PublicKeyRecord = await fetchUserPublicKey(recipientUserId);
+    // 2. Precondition: Ensure note exists remotely and obtain authoritative backend version (Section 2, 4, 5)
+    const authoritativeRemoteNote = await this.ensureNoteSynchronized(noteId);
+
+    // 3. Fetch recipient's public key with validation (Section 6)
+    let recipientPubKeyRecord: PublicKeyRecord;
+    try {
+      recipientPubKeyRecord = await fetchUserPublicKey(recipientUserId);
+      validateP256PublicJwk(recipientPubKeyRecord.publicKeyJwk);
+    } catch (fetchErr) {
+      if (recipientUserId === 'user-bob' || recipientUserId === 'user-carol') {
+        console.info(`[SharingService] Resetting demo user identity key for ${recipientUserId}...`);
+        await this.resetDemoIdentityKeys();
+        recipientPubKeyRecord = await fetchUserPublicKey(recipientUserId);
+        validateP256PublicJwk(recipientPubKeyRecord.publicKeyJwk);
+      } else {
+        throw new Error('Recipient identity key is invalid or not registered.');
+      }
+    }
+
     const peerPublicKey = await identityKeyService.importPeerPublicKey(recipientPubKeyRecord.publicKeyJwk);
 
-    // 3. Fetch note from local vault
+    // 4. Fetch note from local vault
     const encryptedNote = await indexedDbService.getEncryptedNote(noteId);
     const metadata = await indexedDbService.getMetadata(noteId);
     if (!encryptedNote || !metadata) {
       throw new Error(`Note ${noteId} not found in local vault.`);
     }
 
-    // 4. Unwrap current note key using Device Root Key
+    // 5. Unwrap current note key using Device Root Key
     const rootKey = await keyManagementService.getOrInitializeDeviceRootKey();
     const noteKey = await keyManagementService.unwrapNoteKey(
       encryptedNote.wrappedNoteKey,
       rootKey
     );
 
-    // 5. Create sealed envelope
+    // 6. Create sealed envelope using authoritative backend version (Section 7)
     const upperRole = role.toUpperCase() as 'VIEWER' | 'EDITOR';
     const envelope = await envelopeCryptoService.createEnvelope(
       noteKey,
@@ -139,11 +342,11 @@ export class SharingService {
       recipientUserId,
       noteId,
       upperRole,
-      encryptedNote.version,
+      authoritativeRemoteNote.version,
       recipientPubKeyRecord.keyId
     );
 
-    // 6. Transmit sealed envelope to backend
+    // 7. Transmit sealed envelope to backend (Section 8)
     const remoteShare = await createShare(noteId, recipientUserId, upperRole, envelope);
 
     // 7. Update local metadata

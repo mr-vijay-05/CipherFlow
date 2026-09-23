@@ -43,13 +43,23 @@ export const NoteDetailPage: React.FC = () => {
   }
 
   if (error) {
+    const isTamper = error.toLowerCase().includes('tag mismatch') || 
+                    error.toLowerCase().includes('corrupted') || 
+                    error.toLowerCase().includes('integrity') ||
+                    error.toLowerCase().includes('authentication') ||
+                    error.toLowerCase().includes('aad');
+
     return (
       <div className="max-w-2xl mx-auto py-12">
-        <div className="bg-white rounded-2xl border border-rose-200 p-8 shadow-card">
+        <div className={`bg-white rounded-2xl border ${isTamper ? 'border-rose-300' : 'border-slate-200'} p-8 shadow-card`}>
           <EmptyState
             icon={<FileQuestion className="w-8 h-8 text-rose-500" />}
-            title="Decryption Error"
-            description={`Could not decrypt this note payload: ${error}`}
+            title={isTamper ? "Cryptographic Integrity Alert: Decryption Failed" : "Decryption Error"}
+            description={
+              isTamper
+                ? `Fail-Closed Security Boundary: WebCrypto AES-256-GCM message authentication tag rejected this note's ciphertext/IV/AAD. Plaintext content is permanently shielded. Error: ${error}`
+                : `Could not decrypt this note payload: ${error}`
+            }
             actionLabel="Back to All Notes"
             actionIcon={<ArrowLeft className="w-4 h-4" />}
             onAction={() => navigate('/notes')}

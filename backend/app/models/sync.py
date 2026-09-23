@@ -1,7 +1,7 @@
 import datetime
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, PrimaryKeyConstraint
 from sqlalchemy.orm import relationship
-from backend.app.database import Base
+from app.database import Base
 
 class SyncState(Base):
     __tablename__ = "sync_state"
@@ -17,3 +17,4 @@ class SyncState(Base):
 
     device = relationship("Device", back_populates="sync_states")
     note = relationship("Note")
+

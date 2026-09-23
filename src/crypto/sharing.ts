@@ -11,7 +11,7 @@
  */
 
 import { arrayBufferToBase64, base64ToArrayBuffer } from './codec';
-import { ASYMMETRIC_ALGORITHM, NAMED_CURVE } from './identityKeys';
+import { ASYMMETRIC_ALGORITHM, NAMED_CURVE, validateP256PublicJwk } from './identityKeys';
 
 export const ENVELOPE_ALGORITHM = 'ECDH-P256-HKDF-AES-GCM';
 export const ENVELOPE_HKDF_INFO = new TextEncoder().encode('cipherflow-note-envelope-v1');
@@ -146,7 +146,9 @@ export class EnvelopeCryptoService {
     envelope: KeyEnvelopePayload,
     recipientPrivateKey: CryptoKey
   ): Promise<CryptoKey> {
-    // 1. Import ephemeral public key
+    // 1. Validate and import ephemeral public key
+    validateP256PublicJwk(envelope.ephemeralPublicKeyJwk);
+
     const ephemeralPublicKey = await crypto.subtle.importKey(
       'jwk',
       envelope.ephemeralPublicKeyJwk,

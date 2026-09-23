@@ -17,6 +17,7 @@
 import { indexedDbService, EncryptedNoteRecord, NoteMetadataRecord, SyncStatus } from '../storage/indexedDb';
 import {
   createRemoteNote,
+  getRemoteNote,
   updateRemoteNote,
   deleteRemoteNote,
   RemoteEncryptedNoteResponse,
@@ -256,7 +257,12 @@ class SyncService {
 
     for (const record of encryptedNotes) {
       const meta = metadataMap.get(record.noteId);
-      if (!record.syncStatus || record.syncStatus === 'synced' || record.syncStatus === 'conflict') {
+      let currentStatus = record.syncStatus;
+      if (!currentStatus) {
+        currentStatus = 'pending_create';
+        record.syncStatus = 'pending_create';
+      }
+      if (currentStatus === 'synced' || currentStatus === 'conflict') {
         continue;
       }
 
@@ -271,25 +277,43 @@ class SyncService {
 
       try {
         if (record.syncStatus === 'pending_create') {
-          const response = await createRemoteNote({
-            noteId: record.noteId,
-            version: record.version || 1,
-            ciphertext: record.ciphertext,
-            iv: record.iv,
-            wrappedNoteKey: record.wrappedNoteKey,
-            aad: record.aad,
-            metadata: noteMetadataPayload,
-          });
+          try {
+            const response = await createRemoteNote({
+              noteId: record.noteId,
+              version: record.version || 1,
+              ciphertext: record.ciphertext,
+              iv: record.iv,
+              wrappedNoteKey: record.wrappedNoteKey,
+              aad: record.aad,
+              metadata: noteMetadataPayload,
+            });
 
-          record.syncStatus = 'synced';
-          record.remoteVersion = response.version;
-          record.lastSyncedAt = response.updatedAt;
-          await indexedDbService.saveEncryptedNote(record);
+            record.syncStatus = 'synced';
+            record.remoteVersion = response.version;
+            record.lastSyncedAt = response.updatedAt;
+            await indexedDbService.saveEncryptedNote(record);
 
-          if (meta) {
-            meta.syncStatus = 'synced';
-            meta.remoteVersion = response.version;
-            await indexedDbService.saveMetadata(meta);
+            if (meta) {
+              meta.syncStatus = 'synced';
+              meta.remoteVersion = response.version;
+              await indexedDbService.saveMetadata(meta);
+            }
+          } catch (createErr: any) {
+            if (createErr?.status === 409) {
+              const remote = await getRemoteNote(record.noteId);
+              record.syncStatus = 'synced';
+              record.remoteVersion = remote.version;
+              record.lastSyncedAt = remote.updatedAt;
+              await indexedDbService.saveEncryptedNote(record);
+
+              if (meta) {
+                meta.syncStatus = 'synced';
+                meta.remoteVersion = remote.version;
+                await indexedDbService.saveMetadata(meta);
+              }
+            } else {
+              throw createErr;
+            }
           }
         } else if (record.syncStatus === 'pending_update') {
           const baseVersion = record.remoteVersion || (record.version > 1 ? record.version - 1 : 1);
@@ -345,6 +369,13 @@ class SyncService {
         console.warn(`Failed to push note ${record.noteId}:`, err);
         throw err;
       }
+    }
+
+    try {
+      const { auditService } = await import('./auditService');
+      auditService.notify();
+    } catch {
+      // ignore
     }
   }
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { securityService } from '../services/securityService';
+import { securityService, TamperDetectionResult } from '../services/securityService';
 import { sharingService } from '../services/sharingService';
 import { SecurityOverview } from '../types/security';
 import { Card } from '../components/common/Card';
@@ -25,12 +25,16 @@ import {
   AlertTriangle,
   History,
   FileKey,
+  AlertCircle,
+  Bug,
 } from 'lucide-react';
 
 export const SecurityCenterPage: React.FC = () => {
   const [overview, setOverview] = useState<SecurityOverview | null>(null);
   const [isAuditing, setIsAuditing] = useState(false);
   const [diagnosticResult, setDiagnosticResult] = useState<any | null>(null);
+  const [tamperResult, setTamperResult] = useState<TamperDetectionResult | null>(null);
+  const [isTestingTamper, setIsTestingTamper] = useState(false);
   const [backendStatus, setBackendStatus] = useState<{ online: boolean; version?: string }>({ online: false });
   const [identityKey, setIdentityKey] = useState<IdentityKeyPair | null>(null);
   const [auditEvents, setAuditEvents] = useState<RemoteAuditEvent[]>([]);
@@ -90,6 +94,32 @@ export const SecurityCenterPage: React.FC = () => {
     }
   };
 
+  const handleRunTamperTest = async () => {
+    setIsTestingTamper(true);
+    try {
+      const res = await securityService.runTamperDetectionTest();
+      setTamperResult(res);
+      await loadData();
+      if (res.status === 'PASS') {
+        showToast(
+          'Tamper Detection Passed',
+          'WebCrypto AES-256-GCM successfully rejected tampered ciphertext without exposing plaintext.',
+          'success'
+        );
+      } else {
+        showToast(
+          'Tamper Test Failed',
+          res.errorDetail || 'Cryptographic integrity test failed.',
+          'error'
+        );
+      }
+    } catch (err: any) {
+      showToast('Tamper Diagnostic Error', err?.message || 'Failed to complete test', 'error');
+    } finally {
+      setIsTestingTamper(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -103,15 +133,27 @@ export const SecurityCenterPage: React.FC = () => {
           </p>
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRunDiagnostic}
-          disabled={isAuditing}
-          icon={<RefreshCw className={`w-3.5 h-3.5 ${isAuditing ? 'animate-spin' : ''}`} />}
-        >
-          {isAuditing ? 'Verifying Vault...' : 'Run Security Diagnostic'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleRunTamperTest}
+            disabled={isTestingTamper}
+            icon={<ShieldAlert className={`w-3.5 h-3.5 ${isTestingTamper ? 'animate-spin' : ''}`} />}
+          >
+            {isTestingTamper ? 'Verifying AES-GCM...' : 'Run Tamper Detection Test'}
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRunDiagnostic}
+            disabled={isAuditing}
+            icon={<RefreshCw className={`w-3.5 h-3.5 ${isAuditing ? 'animate-spin' : ''}`} />}
+          >
+            {isAuditing ? 'Verifying Vault...' : 'Run Security Diagnostic'}
+          </Button>
+        </div>
       </div>
 
       {/* Main Status Hero Card */}
@@ -140,6 +182,109 @@ export const SecurityCenterPage: React.FC = () => {
             </span>
           </div>
         </div>
+      </Card>
+
+      {/* Live Tamper-Detection Validation Card */}
+      <Card padding="md" className="bg-white border-purple-200/90 shadow-card">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-slate-900">Live Tamper-Detection Validation</h4>
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full border bg-purple-50 text-purple-700 border-purple-200">
+                  AES-256-GCM AEAD
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Exercises the real WebCrypto authentication boundary by bit-flipping an in-memory clone of encrypted ciphertext without modifying storage.
+              </p>
+            </div>
+          </div>
+
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleRunTamperTest}
+            disabled={isTestingTamper}
+            icon={<ShieldAlert className={`w-3.5 h-3.5 ${isTestingTamper ? 'animate-spin' : ''}`} />}
+          >
+            {isTestingTamper ? 'Verifying AES-GCM...' : 'Run Tamper Detection Test'}
+          </Button>
+        </div>
+
+        {tamperResult ? (
+          <div className="mt-4 p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 tracking-wider">
+                TAMPER DETECTION
+              </span>
+              <span
+                className={`text-[11px] font-extrabold px-3 py-0.5 rounded-full border ${
+                  tamperResult.status === 'PASS'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-rose-50 text-rose-700 border-rose-200'
+                }`}
+              >
+                STATUS: {tamperResult.status}
+              </span>
+            </div>
+
+            <div className="space-y-2 text-xs font-medium">
+              <div className="flex items-center gap-2">
+                {tamperResult.originalDecrypts ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span className={tamperResult.originalDecrypts ? 'text-emerald-950 font-semibold' : 'text-rose-700 font-semibold'}>
+                  ✓ Original ciphertext decrypts
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {tamperResult.tamperedRejected ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span className={tamperResult.tamperedRejected ? 'text-emerald-950 font-semibold' : 'text-rose-700 font-semibold'}>
+                  ✓ Tampered ciphertext rejected
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {tamperResult.plaintextNotExposed ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span className={tamperResult.plaintextNotExposed ? 'text-emerald-950 font-semibold' : 'text-rose-700 font-semibold'}>
+                  ✓ Plaintext not exposed
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-3 pt-3 border-t border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-slate-500">
+              <span>
+                Target Note: <strong className="text-slate-700 font-mono">{tamperResult.noteTitle}</strong> ({tamperResult.noteId})
+              </span>
+              <span>
+                Storage Untouched: <strong className="text-emerald-700">{tamperResult.storageUntouched ? 'VERIFIED' : 'FAILED'}</strong>
+              </span>
+              <span>
+                Verified at: {tamperResult.timestamp}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 p-3 bg-slate-50/60 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500 flex items-center justify-between">
+            <span>Click &ldquo;Run Tamper Detection Test&rdquo; to execute a live in-memory ciphertext bit-flip test against the WebCrypto AES-GCM engine.</span>
+            <span className="text-[10px] font-bold text-slate-400 font-mono">READY</span>
+          </div>
+        )}
       </Card>
 
       {/* Phase 4: Asymmetric Identity Key & Envelope Status */}

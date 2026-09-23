@@ -1,5 +1,5 @@
-import React from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import React, { useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   FileText,
@@ -16,10 +16,13 @@ import {
   ScrollText,
   Cloud,
   MoreVertical,
-  Shield
+  Shield,
+  LogOut,
+  UserCheck,
 } from 'lucide-react';
 import { NAVIGATION_CONFIG, NavItem } from '../../data/navigation';
 import { BRAND } from '../../constants/brand';
+import { useAuth } from '../../context/AuthContext';
 
 const ICON_MAP = {
   LayoutDashboard,
@@ -45,6 +48,9 @@ export interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ className = '', onNavigate }) => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   const isRouteActive = (href: string) => {
     if (href === '/dashboard' || href === '/') {
@@ -146,26 +152,62 @@ export const Sidebar: React.FC<SidebarProps> = ({ className = '', onNavigate }) 
         </div>
 
         {/* User Profile */}
-        <div className="flex items-center justify-between p-1.5 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shrink-0 ring-2 ring-blue-100">
-              {BRAND.defaultUser.avatarText}
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-bold text-slate-900 truncate">
-                {BRAND.defaultUser.name}
-              </p>
-              <p className="text-[11px] text-slate-400 truncate">
-                {BRAND.defaultUser.email}
-              </p>
-            </div>
-          </div>
-          <button
-            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
-            aria-label="User account actions"
+        <div className="relative">
+          <div
+            onClick={() => setShowUserMenu(!showUserMenu)}
+            className="flex items-center justify-between p-1.5 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
           >
-            <MoreVertical className="w-4 h-4" />
-          </button>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shrink-0 ring-2 ring-blue-100">
+                {user.avatarText || BRAND.defaultUser.avatarText}
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-900 truncate">
+                  {user.name || BRAND.defaultUser.name}
+                </p>
+                <p className="text-[11px] text-slate-400 truncate">
+                  {user.email || BRAND.defaultUser.email}
+                </p>
+              </div>
+            </div>
+            <button
+              className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              aria-label="User account actions"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* User Popover Menu */}
+          {showUserMenu && (
+            <div className="absolute bottom-full left-0 right-0 mb-2 p-1.5 bg-white rounded-2xl shadow-dropdown border border-slate-200 z-50 text-xs">
+              <div className="px-2.5 py-1.5 border-b border-slate-100 mb-1">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Active Persona</span>
+                <span className="font-semibold text-slate-800">{user.role}</span>
+              </div>
+              <button
+                onClick={() => {
+                  setShowUserMenu(false);
+                  navigate('/login');
+                }}
+                className="w-full text-left px-2.5 py-2 hover:bg-blue-50 text-blue-700 rounded-lg flex items-center gap-2 font-medium transition-colors"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Switch Persona / Login</span>
+              </button>
+              <button
+                onClick={() => {
+                  setShowUserMenu(false);
+                  logout();
+                  navigate('/login');
+                }}
+                className="w-full text-left px-2.5 py-2 hover:bg-rose-50 text-rose-600 rounded-lg flex items-center gap-2 font-medium transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Lock Vault & Sign Out</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </aside>

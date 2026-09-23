@@ -18,11 +18,13 @@ import {
 import {
   encryptionService,
   EncryptedPayload,
+  AuthenticationError,
   CURRENT_ENCRYPTION_VERSION,
   ENCRYPTION_ALGORITHM,
 } from '../crypto/encryption';
 import { keyManagementService } from '../crypto/keys';
 import { syncService } from './syncService';
+import { searchService } from './searchService';
 
 class NoteService {
   private isInitialized = false;
@@ -64,6 +66,7 @@ class NoteService {
             aad: encryptedPayload.aad,
             createdAt: seedNote.createdAt,
             updatedAt: seedNote.updatedAt,
+            syncStatus: 'pending_create',
           };
 
           const metadataRecord: NoteMetadataRecord = {
@@ -80,10 +83,28 @@ class NoteService {
             iconType: seedNote.iconType,
             createdAt: seedNote.createdAt,
             updatedAt: seedNote.updatedAt,
+            syncStatus: 'pending_create',
           };
 
           await indexedDbService.saveEncryptedNote(encryptedRecord);
           await indexedDbService.saveMetadata(metadataRecord);
+
+          // Index blind search tokens for seed note
+          searchService.indexNoteContent(seedNote.id, seedNote.content, seedNote.title).catch(() => {});
+        }
+      } else {
+        // Ensure any existing local notes that lack syncStatus are flagged for sync
+        const existingNotes = await indexedDbService.getAllEncryptedNotes();
+        for (const enc of existingNotes) {
+          if (!enc.syncStatus) {
+            enc.syncStatus = 'pending_create';
+            await indexedDbService.saveEncryptedNote(enc);
+            const meta = await indexedDbService.getMetadata(enc.noteId);
+            if (meta && !meta.syncStatus) {
+              meta.syncStatus = 'pending_create';
+              await indexedDbService.saveMetadata(meta);
+            }
+          }
         }
       }
 
@@ -210,7 +231,29 @@ class NoteService {
       aad: encryptedRecord.aad,
     };
 
-    const decryptedContent = await encryptionService.decrypt(payload, noteKey, id);
+    let decryptedContent: string;
+    try {
+      decryptedContent = await encryptionService.decrypt(payload, noteKey, id);
+    } catch (decryptErr: any) {
+      if (
+        decryptErr instanceof AuthenticationError ||
+        decryptErr?.name === 'OperationError' ||
+        decryptErr?.name === 'AuthenticationError'
+      ) {
+        try {
+          const { auditService } = await import('./auditService');
+          auditService.reportTamperFailure(
+            id,
+            versionForDecrypt,
+            decryptErr.message || 'WebCrypto AES-GCM Authentication Failure: Message authentication tag mismatch',
+            'Fail-closed: Tampered ciphertext, IV, or AAD detected in client decryption path'
+          );
+        } catch (auditErr) {
+          console.warn('[Security] Could not log tamper failure to audit service:', auditErr);
+        }
+      }
+      throw decryptErr;
+    }
 
     // If version had drifted in local storage, heal the record so future operations stay consistent
     if (versionForDecrypt !== encryptedRecord.version) {
@@ -307,6 +350,9 @@ class NoteService {
       // Notify sync coordinator
       syncService.notifyNoteCreated(noteId);
 
+      // Asynchronously index blind search tokens before discarding plaintext from memory
+      searchService.indexNoteContent(noteId, payload.content || '', payload.title).catch(() => {});
+
       return {
         ...payload,
         id: noteId,
@@ -364,7 +410,16 @@ class NoteService {
       existingEncrypted.iv = encryptedPayload.iv;
       existingEncrypted.aad = encryptedPayload.aad;
       existingEncrypted.updatedAt = 'Just now';
+      if (existingEncrypted.syncStatus !== 'pending_create') {
+        existingEncrypted.syncStatus = 'pending_update';
+      }
 
+      await indexedDbService.saveEncryptedNote(existingEncrypted);
+    } else {
+      if (existingEncrypted.syncStatus !== 'pending_create') {
+        existingEncrypted.syncStatus = 'pending_update';
+      }
+      existingEncrypted.updatedAt = 'Just now';
       await indexedDbService.saveEncryptedNote(existingEncrypted);
     }
 
@@ -381,12 +436,19 @@ class NoteService {
       isTrashed: updates.isTrashed !== undefined ? updates.isTrashed : existingMeta.isTrashed,
       spaceId: updates.spaceId !== undefined ? updates.spaceId : existingMeta.spaceId,
       updatedAt: 'Just now',
+      syncStatus: existingMeta.syncStatus === 'pending_create' ? 'pending_create' : 'pending_update',
     };
 
     await indexedDbService.saveMetadata(updatedMeta);
 
     // Notify sync coordinator
     syncService.notifyNoteUpdated(id);
+
+    // Refresh blind search tokens if content or title changed
+    if (newContent !== undefined || updates.title !== undefined) {
+      const contentForIndex = newContent !== undefined ? newContent : '';
+      searchService.indexNoteContent(id, contentForIndex, updatedMeta.title).catch(() => {});
+    }
 
     return {
       id: updatedMeta.noteId,
@@ -447,6 +509,7 @@ class NoteService {
     syncService.notifyNoteDeleted(id);
     await indexedDbService.deleteEncryptedNote(id);
     await indexedDbService.deleteMetadata(id);
+    searchService.removeNoteIndex(id).catch(() => {});
     return true;
   }
 }

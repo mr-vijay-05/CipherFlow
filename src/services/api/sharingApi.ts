@@ -39,7 +39,7 @@ export interface RemoteAuditEvent {
   id: string;
   noteId: string;
   actorId: string;
-  eventType: 'NOTE_SHARED' | 'SHARE_ACCEPTED' | 'ROLE_CHANGED' | 'ACCESS_REVOKED' | 'KEY_ROTATED';
+  eventType: string;
   targetUserId?: string | null;
   noteVersion: number;
   metadata: Record<string, any>;
@@ -134,6 +134,16 @@ export async function fetchNoteAuditEvents(noteId: string): Promise<RemoteAuditE
   );
 }
 
-export async function fetchUserAuditEvents(): Promise<RemoteAuditEvent[]> {
-  return apiClient.get<RemoteAuditEvent[]>('/api/v1/audit-events');
+export async function fetchUserAuditEvents(category?: string): Promise<RemoteAuditEvent[]> {
+  const query = category && category !== 'all' ? `?category=${encodeURIComponent(category)}` : '';
+  return apiClient.get<RemoteAuditEvent[]>(`/api/v1/audit-events${query}`);
+}
+
+export async function reportTamperFailureRemote(payload: {
+  noteId: string;
+  version?: number;
+  reason?: string;
+  details?: string;
+}): Promise<RemoteAuditEvent> {
+  return apiClient.post<RemoteAuditEvent>('/api/v1/audit-events/report-tamper', payload);
 }

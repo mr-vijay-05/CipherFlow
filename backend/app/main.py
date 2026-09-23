@@ -1,11 +1,27 @@
+import sys
+import os
 import logging
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from backend.app.config import settings
-from backend.app.api.router import api_router
-from backend.app.database import engine, Base
-import backend.app.models  # Ensure models are imported for metadata creation
+
+backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+root_dir = os.path.dirname(backend_dir)
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
+try:
+    from app.config import settings
+    from app.api.router import api_router
+    from app.database import engine, Base
+    import app.models
+except ImportError:
+    from backend.app.config import settings
+    from backend.app.api.router import api_router
+    from backend.app.database import engine, Base
+    import backend.app.models
 
 # Configure safe zero-plaintext logger (Section 18)
 logging.basicConfig(
@@ -45,7 +61,7 @@ async def validate_request_size(request: Request, call_next):
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > settings.MAX_PAYLOAD_BYTES:
         return JSONResponse(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             content={"detail": "Encrypted payload exceeds maximum permitted size (10 MB)."},
         )
     return await call_next(request)

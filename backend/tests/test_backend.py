@@ -1,10 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
-from backend.app.main import app
-from backend.app.database import SessionLocal, Base, engine
-from backend.app.models.user import User
-from backend.app.models.note import Note, NoteVersion, NoteMetadata
-from backend.app.security.auth import create_dev_access_token
+from app.main import app
+from app.database import SessionLocal, Base, engine
+from app.models.user import User
+from app.models.note import Note, NoteVersion, NoteMetadata
+from app.security.auth import create_dev_access_token
 
 @pytest.fixture(scope="module")
 def client():
@@ -174,3 +174,41 @@ def test_zero_plaintext_note_body_in_server_storage():
         assert sensitive_word not in m.description, "Plaintext found in description!"
 
     db.close()
+
+
+# 11. AUDIT TRAIL: Note creation and updates must generate server-side audit events
+def test_note_creation_and_update_audit_events(client, user_a):
+    headers = {"Authorization": f"Bearer {user_a['token']}"}
+    
+    # Check user audit events
+    res = client.get("/api/v1/audit-events", headers=headers)
+    assert res.status_code == 200
+    events = res.json()
+    
+    # Must have NOTE_CREATED and NOTE_UPDATED events
+    created_events = [e for e in events if e["eventType"] == "NOTE_CREATED"]
+    updated_events = [e for e in events if e["eventType"] == "NOTE_UPDATED"]
+    assert len(created_events) >= 1, "Expected NOTE_CREATED audit event"
+    assert len(updated_events) >= 1, "Expected NOTE_UPDATED audit event"
+
+    ev = created_events[0]
+    assert ev["actorId"] == user_a["id"]
+    assert "createdAt" in ev
+    # Verify timezone-aware UTC ISO format
+    assert "+" in ev["createdAt"] or "Z" in ev["createdAt"] or "T" in ev["createdAt"]
+    assert "ipAddress" in ev["metadata"]
+
+    # Test report tamper endpoint
+    tamper_payload = {
+        "noteId": "note-backend-test-1",
+        "version": 2,
+        "reason": "Test in-memory AES-GCM tag mismatch",
+        "details": "Simulated live tamper detection bit-flip",
+    }
+    res_tamper = client.post("/api/v1/audit-events/report-tamper", json=tamper_payload, headers=headers)
+    assert res_tamper.status_code == 201
+    tamper_event = res_tamper.json()
+    assert tamper_event["eventType"] == "NOTE_DECRYPTION_TAMPER_FAILURE"
+    assert tamper_event["metadata"]["status"] == "alert"
+
+

@@ -17,8 +17,13 @@ import { DevicesPage } from '../pages/DevicesPage';
 import { SecurityCenterPage } from '../pages/SecurityCenterPage';
 import { AuditLogsPage } from '../pages/AuditLogsPage';
 import { SettingsPage } from '../pages/SettingsPage';
+import { LoginPage } from '../pages/LoginPage';
 
 export const router = createBrowserRouter([
+  {
+    path: '/login',
+    element: <LoginPage />,
+  },
   {
     path: '/',
     element: <AppShell />,

@@ -1,19 +1,35 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import json
+import uuid
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
-from backend.app.database import get_db
-from backend.app.models.user import User
-from backend.app.models.note import Note
-from backend.app.models.sharing import NoteShare, KeyEnvelope
-from backend.app.schemas.note import (
+from app.database import get_db
+from app.models.user import User
+from app.models.note import Note
+from app.models.sharing import NoteShare, KeyEnvelope, AuditEvent
+from app.schemas.note import (
     EncryptedNoteCreate,
     EncryptedNoteUpdate,
     EncryptedNoteResponse,
     NoteMetadataPayload,
 )
-from backend.app.repositories.note_repository import note_repo, VersionConflictException
-from backend.app.security.auth import get_current_user
+from app.repositories.note_repository import note_repo, VersionConflictException
+from app.security.auth import get_current_user
 
 router = APIRouter(prefix="/notes", tags=["Encrypted Notes"])
+
+def format_utc_iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+def get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "Not available"
 
 def build_response(note, version, metadata) -> EncryptedNoteResponse:
     return EncryptedNoteResponse(
@@ -32,13 +48,14 @@ def build_response(note, version, metadata) -> EncryptedNoteResponse:
             isPinned=metadata.is_pinned,
         ),
         isDeleted=note.is_deleted,
-        createdAt=note.created_at.isoformat(),
-        updatedAt=note.updated_at.isoformat(),
+        createdAt=format_utc_iso(note.created_at),
+        updatedAt=format_utc_iso(note.updated_at),
     )
 
 @router.post("", response_model=EncryptedNoteResponse, status_code=status.HTTP_201_CREATED)
 def create_encrypted_note(
     payload: EncryptedNoteCreate,
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -54,9 +71,31 @@ def create_encrypted_note(
         )
 
     note, version, metadata = note_repo.create(db, user.id, payload)
+
+    # Record NOTE_CREATED audit event
+    now = datetime.now(timezone.utc)
+    client_ip = get_client_ip(request)
+    audit = AuditEvent(
+        id=f"audit-{int(now.timestamp()*1000)}-{uuid.uuid4().hex[:6]}",
+        note_id=note.id,
+        actor_id=user.id,
+        event_type="NOTE_CREATED",
+        target_user_id=None,
+        note_version=version.version,
+        metadata_json=json.dumps({
+            "ipAddress": client_ip,
+            "noteTitle": metadata.title,
+            "action": "New Note Initialized",
+            "algorithm": "AES-256-GCM",
+        }),
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
     return build_response(note, version, metadata)
 
-from backend.app.models.sharing import NoteShare, KeyEnvelope
+from app.models.sharing import NoteShare, KeyEnvelope
 
 @router.get("/{note_id}", response_model=EncryptedNoteResponse)
 def get_encrypted_note(
@@ -121,6 +160,7 @@ def get_encrypted_note(
 def update_encrypted_note(
     note_id: str,
     payload: EncryptedNoteUpdate,
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -155,6 +195,30 @@ def update_encrypted_note(
 
     try:
         note, version, metadata = note_repo.update_version(db, note, payload)
+
+        # Record NOTE_UPDATED audit event
+        now = datetime.now(timezone.utc)
+        client_ip = get_client_ip(request)
+        audit = AuditEvent(
+            id=f"audit-{int(now.timestamp()*1000)}-{uuid.uuid4().hex[:6]}",
+            note_id=note.id,
+            actor_id=user.id,
+            event_type="NOTE_UPDATED",
+            target_user_id=None,
+            note_version=version.version,
+            metadata_json=json.dumps({
+                "ipAddress": client_ip,
+                "noteTitle": metadata.title,
+                "action": "Note Modified & Re-encrypted",
+                "algorithm": "AES-256-GCM",
+                "baseVersion": payload.baseVersion,
+                "newVersion": version.version,
+            }),
+            created_at=now,
+        )
+        db.add(audit)
+        db.commit()
+
         return build_response(note, version, metadata)
     except VersionConflictException as err:
         raise HTTPException(
@@ -190,3 +254,4 @@ def delete_encrypted_note(
 
     note_repo.soft_delete(db, note)
     return None
+

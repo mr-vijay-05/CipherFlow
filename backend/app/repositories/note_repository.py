@@ -1,9 +1,9 @@
-import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
-from backend.app.models.note import Note, NoteVersion, NoteMetadata
-from backend.app.schemas.note import EncryptedNoteCreate, EncryptedNoteUpdate
+from app.models.note import Note, NoteVersion, NoteMetadata
+from app.schemas.note import EncryptedNoteCreate, EncryptedNoteUpdate
 
 class VersionConflictException(Exception):
     def __init__(self, current_version: int, attempted_base_version: int):
@@ -19,7 +19,7 @@ class NoteRepository:
         return db.query(NoteVersion).filter(NoteVersion.note_id == note_id).order_by(NoteVersion.version.desc()).first()
 
     def create(self, db: Session, owner_id: str, payload: EncryptedNoteCreate) -> Tuple[Note, NoteVersion, NoteMetadata]:
-        now = datetime.datetime.utcnow()
+        now = datetime.now(timezone.utc)
         note = Note(
             id=payload.noteId,
             owner_id=owner_id,
@@ -70,7 +70,7 @@ class NoteRepository:
                 attempted_base_version=payload.baseVersion
             )
 
-        now = datetime.datetime.utcnow()
+        now = datetime.now(timezone.utc)
         new_version_num = note.current_version + 1
         note.current_version = new_version_num
         note.updated_at = now
@@ -114,11 +114,11 @@ class NoteRepository:
 
     def soft_delete(self, db: Session, note: Note) -> None:
         note.is_deleted = True
-        note.updated_at = datetime.datetime.utcnow()
+        note.updated_at = datetime.now(timezone.utc)
         db.commit()
 
     def get_changes_since(
-        self, db: Session, owner_id: str, since: datetime.datetime
+        self, db: Session, owner_id: str, since: datetime
     ) -> Tuple[List[Tuple[Note, NoteVersion, NoteMetadata]], List[str]]:
         """
         Returns active note records updated since timestamp, and a list of deleted note IDs (tombstones).
@@ -144,3 +144,4 @@ class NoteRepository:
         return active_items, tombstones
 
 note_repo = NoteRepository()
+
